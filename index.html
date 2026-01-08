@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Ghép Nối: Bảo Vệ Hệ Bài Tiết</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap');
+
+        body {
+            font-family: 'Nunito', sans-serif;
+            background-color: #f0f9ff;
+            overflow: hidden; /* Prevent scrolling while dragging */
+            touch-action: none; /* Disable browser zooming/panning gestures */
+        }
+
+        /* Custom Scrollbar */
+        .item-pool::-webkit-scrollbar { height: 6px; width: 6px; }
+        .item-pool::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+        .item-pool::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+
+        /* Item Card Styling - Responsive Sizes */
+        .draggable-item {
+            cursor: grab;
+            transition: all 0.2s ease;
+            user-select: none;
+            touch-action: none;
+            /* Default Mobile Size */
+            width: 70px; 
+            height: 90px;
+            font-size: 0.8rem;
+        }
+        /* Tablet/Desktop Size */
+        @media (min-width: 768px) {
+            .draggable-item { width: 100px; height: 120px; font-size: 1rem; }
+        }
+
+        .draggable-item[draggable="false"] {
+            cursor: default !important;
+            opacity: 1 !important; 
+        }
+        .draggable-item:active { cursor: grabbing; transform: scale(1.05); }
+        .draggable-item.dragging { opacity: 0.5; transform: scale(0.9); }
+        .draggable-item.selected {
+            ring: 4px;
+            box-shadow: 0 0 0 4px #3b82f6;
+            transform: scale(1.05);
+            z-index: 50;
+        }
+
+        /* Borders */
+        .correct-border { border: 3px solid #22c55e !important; background-color: #f0fdf4; }
+        .wrong-border { border: 3px solid #ef4444 !important; background-color: #fef2f2; }
+
+        /* Drop Zones */
+        .drop-zone { transition: background-color 0.3s ease; position: relative; }
+        .drop-zone.drag-over {
+            background-color: rgba(255, 255, 255, 0.5);
+            border-style: solid;
+            border-color: #3b82f6;
+        }
+
+        /* Animations */
+        @keyframes popIn { 0% { transform: scale(0); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+        .animate-pop { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        @keyframes pulse-red { 0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); } 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } }
+        .timer-warning { color: #ef4444; animation: pulse-red 1s infinite; }
+        
+        /* Dashboard Styling */
+        .dashboard-table th { background-color: #f3f4f6; padding: 12px; text-align: left; font-weight: 700; border-bottom: 2px solid #e5e7eb; }
+        .dashboard-table td { padding: 12px; border-bottom: 1px solid #e5e7eb; }
+        .dashboard-table tr:hover { background-color: #f9fafb; }
+        .badge-playing { background-color: #dbeafe; color: #1e40af; border: 1px solid #93c5fd; }
+        
+        /* =========================================
+           MOBILE LANDSCAPE OPTIMIZATION (CSS MAGIC)
+           ========================================= */
+        @media (max-height: 600px) and (orientation: landscape) {
+            /* Compact Header */
+            #game-header { padding: 4px 16px !important; height: 50px; }
+            #game-header h1 { font-size: 0.8rem !important; line-height: 1.1; }
+            #timer-box { font-size: 1rem !important; padding: 2px 8px !important; }
+            
+            /* Change Layout to Row */
+            #game-layout-main { flex-direction: row !important; padding: 4px !important; gap: 8px !important; }
+            
+            /* Source Zone (Left Side) */
+            #source-container {
+                width: 28% !important;
+                height: 100% !important;
+                min-height: 0 !important;
+                flex-direction: column;
+            }
+            #source-zone {
+                flex-direction: column !important; /* Stack items vertically */
+                flex-wrap: nowrap !important;
+                align-items: center;
+                padding-bottom: 20px;
+            }
+            
+            /* Drop Zones (Right Side) */
+            #zones-container {
+                width: 72% !important;
+                height: 100% !important;
+            }
+            
+            /* Footer */
+            footer { padding: 4px !important; }
+            footer button { padding: 8px !important; }
+        }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col text-slate-800">
+
+    <!-- AUDIO SYSTEM -->
+    <script>
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        let isMuted = false;
+        
+        function playTone(freq, type, duration, vol=0.1) {
+            if (isMuted) return;
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+            gainNode.gain.setValueAtTime(vol, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + duration);
+        }
+
+        const Sound = {
+            click: () => playTone(600, 'sine', 0.1),
+            drop: () => playTone(400, 'sine', 0.05),
+            correct: () => { playTone(800, 'sine', 0.1); setTimeout(() => playTone(1200, 'sine', 0.2), 100); },
+            wrong: () => { playTone(150, 'sawtooth', 0.15); setTimeout(() => playTone(100, 'sawtooth', 0.2), 150); },
+            win: () => { if(!isMuted) [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => playTone(f, 'triangle', 0.3), i*150)); },
+            
+            bgmInterval: null,
+            melody: [{f: 261.63, d: 0.3}, {f: 0, d: 0.1}, {f: 329.63, d: 0.3}, {f: 0, d: 0.1}, {f: 392.00, d: 0.3}, {f: 0, d: 0.1}, {f: 523.25, d: 0.3}, {f: 0, d: 0.1}, {f: 392.00, d: 0.3}, {f: 0, d: 0.1}, {f: 329.63, d: 0.3}, {f: 0, d: 0.1}],
+            playBGM: function() {
+                if (this.bgmInterval) clearInterval(this.bgmInterval);
+                if (isMuted) return;
+                let i = 0;
+                this.bgmInterval = setInterval(() => {
+                    if (isMuted || gameState !== 'playing') return;
+                    const note = this.melody[i % this.melody.length];
+                    if (note.f > 0) playTone(note.f, 'sine', note.d, 0.03); 
+                    i++;
+                }, 500);
+            },
+            stopBGM: function() { if (this.bgmInterval) clearInterval(this.bgmInterval); }
+        };
+    </script>
+
+    <!-- FIREBASE & LOGIC MODULE -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, doc, updateDoc, onSnapshot, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        // ============================================================
+        // 🔧 CẤU HÌNH FIREBASE - ĐÃ GIỮ NGUYÊN
+        // ============================================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyDu8USfLH7Dp8kJwtq8Fh30uFDzctD_oh0",
+            authDomain: "bai35-cdf1a.firebaseapp.com",
+            projectId: "bai35-cdf1a",
+            storageBucket: "bai35-cdf1a.firebasestorage.app",
+            messagingSenderId: "598092398656",
+            appId: "1:598092398656:web:f5264312a803f5a1585fa5"
+        };
+
+        // --- KHỞI TẠO HỆ THỐNG DỮ LIỆU ---
+        let db = null;
+        let useCloud = false;
+        
+        if (firebaseConfig.apiKey) {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                useCloud = true;
+                console.log("✅ Cloud OK");
+            } catch (error) {
+                console.error("Firebase Error:", error);
+            }
+        }
+
+        // Expose functions global
+        window.startGame = startGame;
+        window.finishGame = finishGame;
+        window.reviewGame = reviewGame;
+        window.replaySameGroup = replaySameGroup;
+        window.openDashboard = openDashboard;
+        window.closeDashboard = closeDashboard;
+        window.resetAllData = resetAllData;
+        window.toggleSound = toggleSound;
+        window.confirmExit = confirmExit;
+        
+        window.allowDrop = allowDrop;
+        window.drop = drop;
+        window.dragStart = dragStart;
+        window.dragEnd = dragEnd;
+        window.handleZoneClick = handleZoneClick;
+        window.handleItemClick = handleItemClick;
+
+        // --- DATA ADAPTER ---
+        async function createSessionAdapter(group) {
+            if (useCloud) {
+                try {
+                    const docRef = await addDoc(collection(db, "sessions"), {
+                        group: group, status: 'playing', score: 0, time: 0, startTime: new Date().toLocaleTimeString('vi-VN'), finishTime: '--', createdAt: serverTimestamp()
+                    });
+                    return docRef.id;
+                } catch (e) { return null; }
+            } else {
+                const sessions = JSON.parse(localStorage.getItem('he_bai_tiet_game_sessions') || '[]');
+                const newSession = { id: Date.now().toString(), group: group, status: 'playing', score: 0, time: 0, startTime: new Date().toLocaleTimeString('vi-VN'), finishTime: '--', timestamp: Date.now() };
+                sessions.push(newSession);
+                localStorage.setItem('he_bai_tiet_game_sessions', JSON.stringify(sessions));
+                return newSession.id;
+            }
+        }
+
+        async function updateSessionAdapter(sessionId, score, timeUsed) {
+            const finishTime = new Date().toLocaleTimeString('vi-VN');
+            if (useCloud && sessionId) {
+                try {
+                    const sessionRef = doc(db, "sessions", sessionId);
+                    await updateDoc(sessionRef, { status: 'finished', score: score, time: timeUsed, finishTime: finishTime });
+                } catch (e) {}
+            } else {
+                const sessions = JSON.parse(localStorage.getItem('he_bai_tiet_game_sessions') || '[]');
+                const idx = sessions.findIndex(s => s.id === sessionId);
+                if (idx !== -1) { sessions[idx].status = 'finished'; sessions[idx].score = score; sessions[idx].time = timeUsed; sessions[idx].finishTime = finishTime; localStorage.setItem('he_bai_tiet_game_sessions', JSON.stringify(sessions)); }
+            }
+            if (!useCloud && !document.getElementById('dashboard-screen').classList.contains('hidden')) renderDashboardLocal();
+        }
+
+        // --- DASHBOARD ---
+        let unsubscribeSnapshot = null;
+        function openDashboard() {
+            const pass = prompt("Nhập mật khẩu giáo viên (Gợi ý: 1111):");
+            if (pass === '1111') {
+                document.getElementById('dashboard-screen').classList.remove('hidden');
+                document.getElementById('start-screen').classList.add('hidden');
+                if (useCloud) {
+                    const q = query(collection(db, "sessions"), orderBy("createdAt", "desc"));
+                    unsubscribeSnapshot = onSnapshot(q, (qs) => {
+                        const sessions = []; qs.forEach((d) => sessions.push({ id: d.id, ...d.data() })); renderDashboardUI(sessions);
+                    });
+                } else renderDashboardLocal();
+            } else if (pass !== null) alert("Sai mật khẩu!");
+        }
+
+        function closeDashboard() {
+            if (unsubscribeSnapshot) unsubscribeSnapshot();
+            document.getElementById('dashboard-screen').classList.add('hidden');
+            document.getElementById('start-screen').classList.remove('hidden');
+        }
+
+        function renderDashboardLocal() {
+            const sessions = JSON.parse(localStorage.getItem('he_bai_tiet_game_sessions') || '[]');
+            sessions.sort((a, b) => b.timestamp - a.timestamp);
+            renderDashboardUI(sessions);
+        }
+
+        function renderDashboardUI(sessions) {
+            const activeTbody = document.getElementById('active-table-body');
+            const resultTbody = document.getElementById('result-table-body');
+            activeTbody.innerHTML = ''; resultTbody.innerHTML = '';
+            
+            const activeSessions = sessions.filter(s => s.status === 'playing');
+            const finishedSessions = sessions.filter(s => s.status === 'finished');
+            
+            if (activeSessions.length === 0) document.getElementById('no-active-msg').classList.remove('hidden');
+            else {
+                document.getElementById('no-active-msg').classList.add('hidden');
+                activeSessions.forEach(s => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `<td class="font-bold text-blue-700">${s.group}</td><td>${s.startTime}</td><td><span class="badge-playing px-2 py-1 rounded-full text-xs font-bold animate-pulse">Đang chơi...</span></td>`;
+                    activeTbody.appendChild(row);
+                });
+            }
+
+            if (finishedSessions.length === 0) document.getElementById('no-result-msg').classList.remove('hidden');
+            else {
+                document.getElementById('no-result-msg').classList.add('hidden');
+                finishedSessions.sort((a, b) => b.score - a.score || a.time - b.time);
+                finishedSessions.forEach((r, index) => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `<td class="font-bold text-gray-500">${index + 1}</td><td class="font-bold text-green-800">${r.group}</td><td><span class="bg-blue-100 text-blue-800 py-1 px-2 rounded-full font-bold">${r.score}/20</span></td><td>${r.time}s</td><td class="text-gray-500 text-sm">${r.finishTime}</td>`;
+                    resultTbody.appendChild(row);
+                });
+            }
+        }
+        
+        async function resetAllData() {
+            const pass = prompt("Nhập lại mật khẩu để XÁC NHẬN XÓA TOÀN BỘ dữ liệu:");
+            if (pass !== '1111') { if(pass) alert("Sai mật khẩu!"); return; }
+            if (useCloud) alert("Với Firebase, bạn vui lòng vào Console để xóa.");
+            else { localStorage.removeItem('he_bai_tiet_game_sessions'); renderDashboardLocal(); alert("Đã xóa dữ liệu cục bộ."); }
+        }
+
+        // --- GAME LOGIC ---
+        const GAME_DATA = [
+            { id: 'g1', text: 'Uống nước lọc', icon: '💧', type: 'good' },
+            { id: 'g2', text: 'Ăn rau xanh', icon: '🥬', type: 'good' },
+            { id: 'g3', text: 'Ăn trái cây', icon: '🍎', type: 'good' },
+            { id: 'g4', text: 'Đi tiểu khi buồn', icon: '🚻', type: 'good' },
+            { id: 'g5', text: 'Vệ sinh cá nhân', icon: '🧼', type: 'good' },
+            { id: 'g6', text: 'Ngủ đủ giấc', icon: '😴', type: 'good' },
+            { id: 'g7', text: 'Vận động nhẹ', icon: '🚶', type: 'good' },
+            { id: 'g8', text: 'Uống đúng giờ', icon: '⏰', type: 'good' },
+            { id: 'g9', text: 'Ăn hợp lí', icon: '🍽️', type: 'good' },
+            { id: 'g10', text: 'Khám sức khỏe', icon: '🏥', type: 'good' },
+            { id: 'b1', text: 'Trà sữa', icon: '🧋', type: 'bad' },
+            { id: 'b2', text: 'Nước ngọt gas', icon: '🥤', type: 'bad' },
+            { id: 'b3', text: 'Đồ chiên rán', icon: '🍟', type: 'bad' },
+            { id: 'b4', text: 'Ăn mặn', icon: '🧂', type: 'bad' },
+            { id: 'b5', text: 'Nhịn tiểu', icon: '🚫', type: 'bad' },
+            { id: 'b6', text: 'Uống ít nước', icon: '🚱', type: 'bad' },
+            { id: 'b7', text: 'Thức khuya', icon: '🌙', type: 'bad' },
+            { id: 'b8', text: 'Đồ ôi thiu', icon: '🤢', type: 'bad' },
+            { id: 'b9', text: 'Lười vận động', icon: '🛋️', type: 'bad' },
+            { id: 'b10', text: 'Nhịn uống nước', icon: '❌', type: 'bad' }
+        ];
+
+        async function startGame() {
+            const groupInput = document.getElementById('group-input');
+            const nameError = document.getElementById('name-error');
+            const nameVal = groupInput.value.trim();
+            if (!nameVal) { nameError.classList.remove('hidden'); groupInput.focus(); return; }
+            nameError.classList.add('hidden');
+            window.currentGroupName = nameVal;
+            document.getElementById('current-group-display').innerText = nameVal;
+
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            window.currentSessionId = await createSessionAdapter(nameVal);
+
+            window.gameState = 'playing';
+            document.getElementById('start-screen').classList.add('hidden');
+            document.getElementById('game-screen').classList.remove('hidden');
+            
+            resetGameUI();
+            
+            const shuffledItems = shuffle([...GAME_DATA]);
+            document.getElementById('source-zone').innerHTML = '';
+            shuffledItems.forEach(item => { document.getElementById('source-zone').appendChild(createItemElement(item)); });
+            updateItemCount();
+            Sound.playBGM();
+
+            window.timeLeft = 120;
+            document.getElementById('timer').innerText = window.timeLeft;
+            if(window.timerInterval) clearInterval(window.timerInterval);
+            window.timerInterval = setInterval(() => {
+                window.timeLeft--;
+                document.getElementById('timer').innerText = window.timeLeft;
+                if (window.timeLeft <= 30) document.getElementById('timer-box').classList.add('timer-warning');
+                if (window.timeLeft <= 0) finishGame(true);
+            }, 1000);
+        }
+
+        async function finishGame(auto = false) {
+            if (window.gameState === 'finished') return;
+            window.gameState = 'finished';
+            clearInterval(window.timerInterval);
+            Sound.stopBGM();
+
+            let score = 0;
+            const goodZoneItems = document.querySelectorAll('#zone-good .draggable-item');
+            const badZoneItems = document.querySelectorAll('#zone-bad .draggable-item');
+
+            goodZoneItems.forEach(el => { el.draggable = false; el.classList.remove('cursor-grab'); if (el.dataset.type === 'good') { score++; el.classList.add('correct-border'); } else el.classList.add('wrong-border'); });
+            badZoneItems.forEach(el => { el.draggable = false; el.classList.remove('cursor-grab'); if (el.dataset.type === 'bad') { score++; el.classList.add('correct-border'); } else el.classList.add('wrong-border'); });
+            const sourceItems = document.querySelectorAll('#source-zone .draggable-item');
+            sourceItems.forEach(el => { el.draggable = false; el.style.opacity = '0.5'; });
+
+            const timeUsed = 120 - window.timeLeft;
+            document.getElementById('final-score').innerText = `${score}/20`;
+            document.getElementById('final-time').innerText = `${timeUsed}s`;
+            document.getElementById('result-group').innerText = window.currentGroupName;
+
+            await updateSessionAdapter(window.currentSessionId, score, timeUsed);
+
+            const title = document.getElementById('result-title');
+            const msg = document.getElementById('result-message');
+            const icon = document.getElementById('result-icon');
+
+            if (score === 20) { title.innerText = "XUẤT SẮC!"; title.className = "text-3xl font-black text-green-600 uppercase"; msg.innerText = "Tuyệt vời! Hệ bài tiết được bảo vệ an toàn."; icon.innerText = "🏆"; Sound.win(); }
+            else if (score >= 15) { title.innerText = "RẤT TỐT!"; title.className = "text-3xl font-black text-blue-600 uppercase"; msg.innerText = "Kiến thức rất vững."; icon.innerText = "🎉"; Sound.correct(); }
+            else { title.innerText = "CỐ LÊN!"; title.className = "text-3xl font-black text-orange-500 uppercase"; msg.innerText = "Hãy xem lại các thói quen xấu."; icon.innerText = "💪"; }
+
+            document.getElementById('result-screen').classList.remove('hidden');
+            document.getElementById('game-screen').classList.add('pointer-events-none'); 
+        }
+
+        function shuffle(array) { let c = array.length, r; while (c != 0) { r = Math.floor(Math.random() * c); c--; [array[c], array[r]] = [array[r], array[c]]; } return array; }
+
+        function createItemElement(item) {
+            const el = document.createElement('div');
+            el.className = 'draggable-item bg-white border border-slate-200 rounded-lg p-1 flex flex-col items-center justify-center shadow-sm text-center cursor-pointer hover:shadow-md relative';
+            el.draggable = true;
+            el.id = item.id;
+            el.dataset.type = item.type;
+            el.innerHTML = `<div class="text-3xl mb-1 pointer-events-none">${item.icon}</div><div class="font-bold leading-tight pointer-events-none line-clamp-2">${item.text}</div>`;
+            el.addEventListener('dragstart', dragStart);
+            el.addEventListener('dragend', dragEnd);
+            el.addEventListener('click', (e) => { e.stopPropagation(); handleItemClick(el); });
+            return el;
+        }
+
+        function resetGameUI() {
+            window.timeLeft = 120;
+            document.getElementById('timer').innerText = window.timeLeft;
+            document.getElementById('timer-box').classList.remove('timer-warning');
+            document.getElementById('source-zone').innerHTML = '';
+            document.getElementById('zone-good').innerHTML = '<div class="placeholder text-green-300 font-bold text-4xl opacity-20 w-full h-full flex items-center justify-center pointer-events-none absolute inset-0 z-0">👍</div>';
+            document.getElementById('zone-bad').innerHTML = '<div class="placeholder text-red-300 font-bold text-4xl opacity-20 w-full h-full flex items-center justify-center pointer-events-none absolute inset-0 z-0">👎</div>';
+        }
+
+        function updateItemCount() { document.getElementById('item-count').innerText = document.getElementById('source-zone').querySelectorAll('.draggable-item').length; }
+
+        let draggedItem = null;
+        function dragStart(e) { draggedItem = this; this.classList.add('dragging'); Sound.click(); selectItem(this); }
+        function dragEnd(e) { this.classList.remove('dragging'); draggedItem = null; }
+        function allowDrop(e) { e.preventDefault(); e.currentTarget.classList.add('drag-over'); }
+        function handleZoneClick(zoneType) { if (window.selectedItemId) { const item = document.getElementById(window.selectedItemId); if (item) { processMove(item, zoneType); deselectItem(); } } }
+        function drop(e, zoneType) { e.preventDefault(); e.currentTarget.classList.remove('drag-over'); const item = draggedItem; if (item) processMove(item, zoneType); }
+        function processMove(item, zoneType) {
+            const targetZoneId = zoneType === 'good' ? 'zone-good' : 'zone-bad';
+            document.getElementById(targetZoneId).appendChild(item);
+            item.classList.add('animate-pop'); setTimeout(() => item.classList.remove('animate-pop'), 300);
+            item.classList.remove('correct-border', 'wrong-border'); Sound.drop(); updateItemCount();
+        }
+        function handleItemClick(el) { if (window.gameState === 'finished') return; if (window.selectedItemId === el.id) deselectItem(); else { deselectItem(); selectItem(el); } }
+        function selectItem(el) { window.selectedItemId = el.id; el.classList.add('selected'); Sound.click(); }
+        function deselectItem() { if (window.selectedItemId) { const prev = document.getElementById(window.selectedItemId); if (prev) prev.classList.remove('selected'); window.selectedItemId = null; } }
+        
+        ['zone-good', 'zone-bad'].forEach(id => { const zone = document.getElementById(id); if(zone) zone.addEventListener('dragleave', () => zone.classList.remove('drag-over')); });
+
+        function reviewGame() { document.getElementById('result-screen').classList.add('hidden'); document.getElementById('game-screen').classList.remove('pointer-events-none'); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+        function replaySameGroup() { document.getElementById('result-screen').classList.add('hidden'); document.getElementById('game-screen').classList.remove('pointer-events-none'); startGame(); }
+        function confirmExit() { if (confirm("Bạn có chắc muốn thoát?")) location.reload(); }
+        function toggleSound() { isMuted = !isMuted; document.getElementById('sound-btn').innerHTML = isMuted ? '🔇' : '🔊'; if (isMuted) Sound.stopBGM(); else Sound.playBGM(); }
+    </script>
+
+    <!-- START SCREEN -->
+    <div id="start-screen" class="fixed inset-0 z-50 bg-gradient-to-br from-blue-400 to-purple-500 flex flex-col items-center justify-center text-white p-4">
+        <div class="bg-white text-slate-800 p-8 rounded-2xl shadow-2xl max-w-lg w-full text-center animate-pop relative">
+            <button onclick="openDashboard()" class="absolute top-4 right-4 text-gray-400 hover:text-blue-600 p-2 text-sm font-bold border rounded bg-gray-50 hover:bg-blue-50">👨‍🏫 Giáo Viên</button>
+            <h1 class="text-3xl md:text-4xl font-black mb-2 text-blue-600 uppercase mt-4">Ghép Nối Nên / Không Nên</h1>
+            <h2 class="text-xl md:text-2xl font-bold mb-6 text-purple-600">Bảo vệ hệ bài tiết</h2>
+            <div class="mb-6 text-left">
+                <label class="block text-gray-700 text-sm font-bold mb-2" for="group-input">Nhập Tên Nhóm / Học Sinh:</label>
+                <input id="group-input" type="text" placeholder="Ví dụ: Tổ 1 - Lớp 8A" class="shadow appearance-none border rounded w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:shadow-outline border-blue-300 focus:border-blue-500 text-lg">
+                <p id="name-error" class="text-red-500 text-xs italic mt-1 hidden">Vui lòng nhập tên nhóm để bắt đầu!</p>
+            </div>
+            <div class="bg-blue-50 p-4 rounded-lg text-sm md:text-base mb-6 text-left">
+                <p>🎯 <strong>Nhiệm vụ:</strong> Phân loại 20 thẻ vào cột đúng.</p>
+                <p>⏱️ <strong>Thời gian:</strong> 120 giây.</p>
+            </div>
+            <button onclick="startGame()" class="w-full bg-gradient-to-r from-green-400 to-green-600 hover:from-green-500 hover:to-green-700 text-white font-bold py-4 px-8 rounded-full text-xl shadow-lg transform transition hover:scale-105 active:scale-95">BẮT ĐẦU TRÒ CHƠI ▶</button>
+        </div>
+    </div>
+
+    <!-- DASHBOARD -->
+    <div id="dashboard-screen" class="hidden fixed inset-0 z-[60] bg-gray-100 flex flex-col">
+        <header class="bg-blue-800 text-white p-4 shadow-md flex justify-between items-center shrink-0">
+            <h1 class="text-xl font-bold uppercase">📊 Bảng Điều Khiển Giáo Viên</h1>
+            <button onclick="closeDashboard()" class="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded text-sm font-bold">✕ Đóng</button>
+        </header>
+        <main class="flex-1 overflow-y-auto p-4 md:p-8 max-w-5xl mx-auto w-full space-y-8">
+            <div class="bg-white rounded-xl shadow p-6">
+                <h2 class="text-xl font-bold text-blue-700 mb-4 flex items-center"><span class="mr-2 animate-pulse">🟢</span> Đang thực hiện</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full dashboard-table text-sm md:text-base"><thead><tr><th class="w-1/3">Tên Nhóm</th><th class="w-1/3">Giờ bắt đầu</th><th class="w-1/3">Trạng thái</th></tr></thead><tbody id="active-table-body"></tbody></table>
+                    <p id="no-active-msg" class="text-center text-gray-500 py-4 italic hidden">Không có nhóm nào đang chơi.</p>
+                </div>
+            </div>
+            <div class="bg-white rounded-xl shadow p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-xl font-bold text-green-700 flex items-center"><span class="mr-2">🏁</span> Đã Hoàn Thành</h2>
+                    <button onclick="resetAllData()" class="bg-red-100 text-red-600 hover:bg-red-200 px-4 py-2 rounded font-bold text-sm flex items-center gap-2">🗑️ Reset</button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full dashboard-table text-sm md:text-base"><thead><tr><th class="w-16">STT</th><th>Tên Nhóm</th><th class="w-32">Điểm Số</th><th class="w-32">Thời Gian</th><th class="w-48">Thời điểm nộp</th></tr></thead><tbody id="result-table-body"></tbody></table>
+                    <p id="no-result-msg" class="text-center text-gray-500 py-4 italic hidden">Chưa có bài nộp nào.</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- MAIN GAME LAYOUT -->
+    <div id="game-screen" class="flex-1 flex flex-col hidden h-full">
+        <header id="game-header" class="bg-white shadow-md p-2 md:p-4 z-10 shrink-0">
+            <div class="max-w-7xl mx-auto flex justify-between items-center">
+                <div class="flex items-center space-x-2 md:space-x-4">
+                    <button onclick="confirmExit()" class="text-gray-400 hover:text-red-500 text-xl font-bold px-2">🏠</button>
+                    <div class="bg-blue-100 p-2 rounded-lg"><h1 class="font-bold text-blue-800 text-xs md:text-sm uppercase leading-tight">Ghép nối Hệ Bài Tiết<br><span id="current-group-display" class="text-sm md:text-lg text-blue-900 font-black">--</span></h1></div>
+                    <button id="sound-btn" onclick="toggleSound()" class="p-2 rounded-full bg-gray-100 hover:bg-gray-200 transition">🔊</button>
+                </div>
+                <div id="timer-box" class="flex items-center bg-gray-100 px-4 py-2 rounded-full border-2 border-gray-300 font-mono text-xl md:text-2xl font-bold text-gray-700">⏱ <span id="timer" class="ml-2">120</span>s</div>
+            </div>
+        </header>
+
+        <!-- Dynamic Layout Container -->
+        <main id="game-layout-main" class="flex-1 flex flex-col overflow-hidden p-2 md:p-4 gap-2 md:gap-4 max-w-7xl mx-auto w-full">
+            
+            <!-- Source Zone Container -->
+            <div id="source-container" class="bg-white rounded-xl shadow-sm border-2 border-slate-200 flex flex-col h-1/3 min-h-[160px] md:h-1/4 shrink-0 transition-all">
+                <div class="px-3 py-1 bg-slate-100 border-b border-slate-200 rounded-t-xl flex justify-between items-center shrink-0">
+                    <h3 class="font-bold text-slate-600">Kho Ảnh (<span id="item-count">20</span>)</h3>
+                    <span class="text-xs text-slate-400 italic">Kéo/Chạm</span>
+                </div>
+                <div id="source-zone" class="item-pool p-2 flex flex-wrap content-start gap-2 overflow-y-auto h-full"></div>
+            </div>
+
+            <!-- Drop Zones Container -->
+            <div id="zones-container" class="flex-1 flex gap-2 md:gap-4 h-2/3 md:h-3/4 min-h-0 transition-all">
+                <div class="flex-1 flex flex-col min-w-0">
+                    <div class="bg-green-600 text-white text-center py-2 rounded-t-xl font-bold uppercase tracking-wider shadow-sm flex items-center justify-center gap-2">✅ Nên</div>
+                    <div id="zone-good" class="drop-zone flex-1 bg-green-50 border-x-2 border-b-2 border-green-200 rounded-b-xl p-2 overflow-y-auto flex flex-wrap content-start gap-2 shadow-inner" ondragover="allowDrop(event)" ondrop="drop(event, 'good')" onclick="handleZoneClick('good')">
+                         <div class="placeholder text-green-300 font-bold text-4xl opacity-20 w-full h-full flex items-center justify-center pointer-events-none absolute inset-0 z-0">👍</div>
+                    </div>
+                </div>
+                <div class="flex-1 flex flex-col min-w-0">
+                    <div class="bg-red-500 text-white text-center py-2 rounded-t-xl font-bold uppercase tracking-wider shadow-sm flex items-center justify-center gap-2">❌ Không</div>
+                    <div id="zone-bad" class="drop-zone flex-1 bg-red-50 border-x-2 border-b-2 border-red-200 rounded-b-xl p-2 overflow-y-auto flex flex-wrap content-start gap-2 shadow-inner" ondragover="allowDrop(event)" ondrop="drop(event, 'bad')" onclick="handleZoneClick('bad')">
+                         <div class="placeholder text-red-300 font-bold text-4xl opacity-20 w-full h-full flex items-center justify-center pointer-events-none absolute inset-0 z-0">👎</div>
+                    </div>
+                </div>
+            </div>
+        </main>
+        
+        <footer class="bg-white p-3 border-t border-gray-200 shrink-0 z-10">
+            <div class="max-w-7xl mx-auto"><button onclick="finishGame()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg shadow-lg uppercase tracking-widest transition active:scale-95">Nộp Bài</button></div>
+        </footer>
+    </div>
+
+    <!-- RESULT SCREEN -->
+    <div id="result-screen" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full text-center animate-pop relative overflow-hidden">
+            <div class="mb-6"><div id="result-icon" class="text-6xl mb-4">🎉</div><h2 id="result-title" class="text-3xl font-black text-gray-800 uppercase">Hoàn Thành!</h2><p id="result-group" class="text-lg font-bold text-blue-600 mt-1"></p><p id="result-message" class="text-gray-500 mt-2">Đã hết giờ hoặc bạn đã nộp bài.</p></div>
+            <div class="grid grid-cols-2 gap-4 mb-8">
+                <div class="bg-blue-50 p-4 rounded-xl"><p class="text-sm text-gray-500 uppercase font-bold">Điểm Số</p><p id="final-score" class="text-4xl font-black text-blue-600">0/20</p></div>
+                <div class="bg-orange-50 p-4 rounded-xl"><p class="text-sm text-gray-500 uppercase font-bold">Thời gian</p><p id="final-time" class="text-4xl font-black text-orange-600">0s</p></div>
+            </div>
+            <div class="flex flex-col gap-3">
+                <button onclick="reviewGame()" class="w-full bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-3 rounded-lg transition shadow-md">🔍 Xem Chi Tiết Đáp Án</button>
+                <div class="flex gap-2"><button onclick="replaySameGroup()" class="flex-1 bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 rounded-lg transition shadow-md">🔄 Nhóm Làm Lại</button><button onclick="location.reload()" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition shadow-md">🏠 Nhóm Mới</button></div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
